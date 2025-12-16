@@ -373,6 +373,22 @@ defmodule BroadwayKafka.BrodClientTest do
       assert {:ok, [], %{client_config: [query_api_versions: false]}} = BrodClient.init(opts)
     end
 
+    test ":allow_topic_auto_creation is an optional positive boolean" do
+      opts = put_in(@opts, [:client_config, :allow_topic_auto_creation], "false")
+
+      assert BrodClient.init(opts) ==
+               {:error, "expected :allow_topic_auto_creation to be a boolean, got: \"false\""}
+
+      opts = put_in(@opts, [:client_config, :allow_topic_auto_creation], false)
+
+      assert {:ok, [],
+              %{
+                client_config: [
+                  allow_topic_auto_creation: false
+                ]
+              }} = BrodClient.init(opts)
+    end
+
     test ":shared_client is an optional boolean" do
       opts = Keyword.put(@opts, :shared_client, "true")
 

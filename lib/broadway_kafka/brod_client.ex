@@ -30,7 +30,8 @@ defmodule BroadwayKafka.BrodClient do
     :request_timeout,
     :client_id_prefix,
     :query_api_versions,
-    :extra_sock_opts
+    :extra_sock_opts,
+    :allow_topic_auto_creation
   ]
 
   @default_receive_interval 2000
@@ -340,6 +341,9 @@ defmodule BroadwayKafka.BrodClient do
   defp validate_option(:query_api_versions, value) when not is_boolean(value),
     do: validation_error(:query_api_versions, "a boolean", value)
 
+  defp validate_option(:allow_topic_auto_creation, value) when not is_boolean(value),
+    do: validation_error(:allow_topic_auto_creation, "a boolean", value)
+
   defp validate_option(:ssl, value) when is_boolean(value), do: {:ok, value}
 
   defp validate_option(:ssl, value) do
@@ -392,7 +396,8 @@ defmodule BroadwayKafka.BrodClient do
          {:ok, _} <- validate(config, :ssl),
          {:ok, _} <- validate(config, :connect_timeout),
          {:ok, _} <- validate(config, :request_timeout),
-         {:ok, _} <- validate(config, :query_api_versions) do
+         {:ok, _} <- validate(config, :query_api_versions),
+         {:ok, _} <- validate(config, :allow_topic_auto_creation) do
       {:ok, config}
     end
   end
