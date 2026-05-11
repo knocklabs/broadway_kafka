@@ -58,7 +58,8 @@ defmodule BroadwayKafka.Acknowledger do
   @spec update_last_offset(t, key, :brod.offset(), seen_offsets) :: t
   def update_last_offset(acknowledgers, key, last_offset, new_offsets) do
     %{^key => {pending, _, seen}} = acknowledgers
-    %{acknowledgers | key => {pending ++ new_offsets, last_offset, seen}}
+    new_pending = :ordsets.union(pending, :ordsets.from_list(new_offsets))
+    %{acknowledgers | key => {new_pending, last_offset, seen}}
   end
 
   @doc """
