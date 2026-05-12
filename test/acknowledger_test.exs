@@ -46,6 +46,16 @@ defmodule BroadwayKafka.AcknowledgerTest do
     assert {true, 19, _} = Ack.update_current_offset(ack, @foo, [17])
   end
 
+  test "update_last_offset preserves set semantics with overlapping offsets" do
+    # Publish 10..14, acknowledge 10..12.
+    ack = Ack.update_last_offset(@ack, @foo, 15, Enum.to_list(10..14))
+    assert {false, 12, ack} = Ack.update_current_offset(ack, @foo, [10, 11, 12])
+
+    # Publish 13..17 (overlapping with previous), acknowledge all.
+    ack = Ack.update_last_offset(ack, @foo, 18, Enum.to_list(13..17))
+    assert {true, 17, _} = Ack.update_current_offset(ack, @foo, [13, 14, 15, 16, 17])
+  end
+
   test "update_current_offset with gaps" do
     ack = Ack.update_last_offset(@ack, @foo, 20, [11, 13, 15, 17, 19])
     assert {true, 19, _} = Ack.update_current_offset(ack, @foo, [9, 11, 13, 15, 17, 19])
