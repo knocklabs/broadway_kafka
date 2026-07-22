@@ -18,6 +18,7 @@ defmodule BroadwayKafka do
       :ok
 
   """
+  @spec update_topics(Broadway.name(), Enumerable.t(String.t())) :: :ok
   def update_topics(name, topics) do
     each_producer(name, &GenServer.cast(&1, {:update_topics, topics}))
   end
