@@ -27,7 +27,6 @@ defmodule BroadwayKafka.ConsumerTest do
   """
 
   use ExUnit.Case
-  require Logger
 
   @moduletag :integration
 
@@ -289,7 +288,6 @@ defmodule BroadwayKafka.ConsumerSharedClientTest do
   """
 
   use ExUnit.Case
-  require Logger
 
   @moduletag :integration
 
