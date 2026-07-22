@@ -69,7 +69,7 @@ defmodule BroadwayKafka.ProducerOptions do
     ],
     max_wait_time: [
       type: :pos_integer,
-      default: to_timeout(second: 1),
+      default: 1_000,
       doc: """
       The most time (in millisecond) that the broker may wait for `:min_bytes` of data.
       """
