@@ -261,11 +261,11 @@ defmodule BroadwayKafka.BrodClientTest do
       assert_opt_error(opts, "expected :max_wait_time to be a positive integer, got: :an_atom")
 
       {:ok, [], %{fetch_config: fetch_config}} = BrodClient.init(@opts)
-      assert not Map.has_key?(fetch_config, :max_wait_time)
+      assert Map.has_key?(fetch_config, :max_wait_time)
 
-      opts = put_in(@opts, [:fetch_config, :max_wait_time], 3)
+      opts = put_in(@opts, [:fetch_config, :max_wait_time], 3000)
       {:ok, [], %{fetch_config: fetch_config}} = BrodClient.init(opts)
-      assert fetch_config[:max_wait_time] == 3
+      assert fetch_config[:max_wait_time] == 3000
     end
 
     test ":client_id_prefix is an optional atom value" do
@@ -406,24 +406,6 @@ defmodule BroadwayKafka.BrodClientTest do
       opts = put_in(@opts, [:client_config, :query_api_versions], false)
 
       assert {:ok, [], %{client_config: [query_api_versions: false]}} = BrodClient.init(opts)
-    end
-
-    test ":allow_topic_auto_creation is an optional positive boolean" do
-      opts = put_in(@opts, [:client_config, :allow_topic_auto_creation], "false")
-
-      assert_opt_error(
-        opts,
-        "expected :allow_topic_auto_creation to be a boolean, got: \"false\""
-      )
-
-      opts = put_in(@opts, [:client_config, :allow_topic_auto_creation], false)
-
-      assert {:ok, [],
-              %{
-                client_config: [
-                  allow_topic_auto_creation: false
-                ]
-              }} = BrodClient.init(opts)
     end
 
     test ":shared_client is an optional boolean" do

@@ -4,36 +4,46 @@ defmodule BroadwayKafka.ProducerOptions do
   group_config_schema = [
     offset_commit_interval_seconds: [
       type: :pos_integer,
+      default: 5,
       doc: """
-      The time in seconds between two offset commit requests.
+      The time *in seconds* between two `OffsetCommitRequest` messages.
       """
     ],
     rejoin_delay_seconds: [
       type: :non_neg_integer,
+      default: 1,
       doc: """
-      The delay in seconds before rejoining the group.
+      The delay *in seconds* before rejoining the group.
       """
     ],
     session_timeout_seconds: [
       type: :pos_integer,
+      default: 30,
       doc: """
-      The time in seconds that the group coordinator waits before it considers a member down.
-      A group member may also consider the coordinator down if it receives no heartbeat response
-      within this time.
+      The time *in seconds* that the group coordinator waits before it considers a member "down"
+      (if no heartbeat or any kind of request is received). A group member may also consider
+      the coordinator "down" if it receives no heartbeat response within this time.
       """
     ],
     heartbeat_rate_seconds: [
       type: :pos_integer,
+      default: 5,
       doc: """
-      The time in seconds between heartbeats sent to the group coordinator. This must be less
-      than `:session_timeout_seconds` and is often no more than one third of that value.
+      The time *in seconds* between heartbeats ("ping" requests) sent to the group coordinator.
+      Heartbeats are used to ensure that the consumer's session stays active and
+      to facilitate rebalancing when new consumers join or leave the group.
+      The value must be set lower than `:session_timeout_seconds`, typically equal to or lower
+      than ⅓ of that value. It can be adjusted even lower to control the expected time
+      for normal rebalances.
       """
     ],
     rebalance_timeout_seconds: [
       type: :pos_integer,
+      default: 30,
       doc: """
-      The time in seconds that each worker has to join the group after a rebalance starts.
-      If a worker takes longer, Kafka removes it from the group.
+      The time *in seconds* that each worker has to join the group after a rebalance starts.
+      If the timeout is exceeded, then the worker will be removed from the group,
+      which will cause offset commit failures.
       """
     ]
   ]
@@ -41,13 +51,17 @@ defmodule BroadwayKafka.ProducerOptions do
   fetch_config_schema = [
     min_bytes: [
       type: :pos_integer,
+      default: 1,
       doc: """
-      The least amount of data that the server should return. The request waits until this much
-      data is ready. A larger value may improve throughput at the cost of more delay.
+      The minimum amount of data to be fetched from the server.
+      If not enough data is available the request will wait for that much data to accumulate
+      before answering. Setting this value greater than `1` can improve
+      server throughput a bit at the cost of additional latency.
       """
     ],
     max_bytes: [
       type: :pos_integer,
+      default: _1mb = 1024 * 1024,
       doc: """
       The most data to fetch from one partition at a time. A larger value may improve throughput
       at the cost of more memory use.
@@ -55,8 +69,9 @@ defmodule BroadwayKafka.ProducerOptions do
     ],
     max_wait_time: [
       type: :pos_integer,
+      default: to_timeout(second: 1),
       doc: """
-      The most time, in milliseconds, that the broker may wait for `:min_bytes` of data.
+      The most time (in millisecond) that the broker may wait for `:min_bytes` of data.
       """
     ]
   ]
@@ -76,28 +91,33 @@ defmodule BroadwayKafka.ProducerOptions do
            {:custom, __MODULE__, :validate_sasl_tuple, []}
          ]},
       doc: """
-      The SASL settings. Pass `{mechanism, username, password}` or `{mechanism, path}`, where
-      `mechanism` is `:plain`, `:scram_sha_256`, or `:scram_sha_512`. You may also pass
-      `{:callback, module, options}` for a SASL plug-in. Defaults to `:undefined`.
+      A tuple of "mechanism" (`:plain`, `:scram_sha_256`, or `:scram_sha_512`),
+      username, and password. See `:brod`'s
+      [`Authentication Support`](https://github.com/kafka4beam/brod#authentication-support)
+      documentation for more information. You may also pass `{:callback, module, options}`
+      for a SASL plug-in. Set this to `:undefined` to disable SASL.
       """
     ],
     ssl: [
       type: {:or, [:boolean, :keyword_list]},
       doc: """
-      A boolean or a keyword list of SSL/TLS client options.
-      See `t::ssl.tls_client_option/0`.
+      A boolean or a keyword list of SSL/TLS client options. See the
+      [`tls_client_option`](http://erlang.org/doc/man/ssl.html#type-tls_client_option)
+      documentation for more information.
       """
     ],
     connect_timeout: [
       type: :pos_integer,
       doc: """
-      The time, in milliseconds, allowed for a connection to Kafka.
+      The time (in milliseconds) allowed for a connection to Kafka. Default is what
+      `:brod` defaults to (5s at the time of writing).
       """
     ],
     request_timeout: [
       type: {:custom, __MODULE__, :validate_integer_gte, [:request_timeout, 1_000]},
       doc: """
-      The time, in milliseconds, allowed for a response from Kafka. It must be at least `1_000`.
+      The time (in milliseconds) allowed for a response from Kafka. It must be at least `1_000`.
+      Default is to use `:brod`'s default timeout which is currently 4 minutes (`240_000`).
       """
     ],
     query_api_versions: [
@@ -110,15 +130,15 @@ defmodule BroadwayKafka.ProducerOptions do
     extra_sock_opts: [
       type: {:list, :any},
       doc: """
-      Extra `gen_tcp` socket options. For example, use `[:inet6]` for an IPv6 broker.
-      Defaults to `[]`.
+      Extra `gen_tcp` socket options. [More info](https://www.erlang.org/doc/man/gen_tcp.html#type-option).
+      Set to `[:inet6]` if your Kafka broker uses IPv6.
       """
     ],
     allow_topic_auto_creation: [
       type: :boolean,
       doc: """
       Whether `:brod` may send metadata requests that can create a topic when the broker allows
-      automatic topic creation. Defaults to `true`.
+      automatic topic creation.
       """
     ]
   ]
@@ -129,18 +149,15 @@ defmodule BroadwayKafka.ProducerOptions do
       required: true,
       doc: """
       A list of host and port pairs, or one string of comma-separated `HOST:PORT` pairs, used
-      to make the first connection to Kafka. For example:
-
-          [localhost: 9092]
-          [{"kafka-vm1", 9092}, {"kafka-vm2", 9092}]
-          "kafka-vm1:9092,kafka-vm2:9092"
+      to make the first connection to Kafka. For example: `[localhost: 9092]`,
+      `[{"kafka-vm1", 9092}, {"kafka-vm2", 9092}]`, `"kafka-vm1:9092,kafka-vm2:9092"`.
       """
     ],
     group_id: [
       type: {:custom, __MODULE__, :validate_nonempty_string, [:group_id]},
       required: true,
       doc: """
-      A non-empty string that names the consumer group that the producer will join.
+      A (non-empty) unique string that identifies the consumer group that the producer will join.
       """
     ],
     topics: [
@@ -154,7 +171,8 @@ defmodule BroadwayKafka.ProducerOptions do
       type: :non_neg_integer,
       default: 2_000,
       doc: """
-      The time, in milliseconds, that the producer waits before asking for more messages.
+      The duration (in milliseconds) that the producer waits before making
+      a request for more messages.
       """
     ],
     reconnect_timeout: [
@@ -166,10 +184,14 @@ defmodule BroadwayKafka.ProducerOptions do
       type: :boolean,
       default: true,
       doc: """
-      Whether Broadway sends an offset commit request after each acknowledgement. Setting this
-      to `false` may improve throughput because commits will follow
-      `:offset_commit_interval_seconds`. A long commit interval may cause more records to run
-      again after a restart or lost connection, so message handling should be safe to repeat.
+      Tells Broadway to send or not an offset commit request after each acknowledgement.
+      Setting this value to `false` can increase performance since commit requests will
+      respect the `:offset_commit_interval_seconds` option. However, setting long commit
+      intervals might lead to a large number of duplicated records to be processed after
+      a server restart or connection loss. If that's the case, make sure your logic is
+      **idempotent** when consuming records to avoid inconsistencies. Also, bear
+      in mind the the negative performance impact might be insignificant if you're using
+      batchers since only one commit request will be performed per batch.
       """
     ],
     offset_reset_policy: [
@@ -178,29 +200,35 @@ defmodule BroadwayKafka.ProducerOptions do
       doc: """
       The offset to use when Kafka has no saved offset or the saved offset has expired. Use
       `:earliest`, `:latest`, or `{:timestamp, timestamp}`, where `timestamp` is a non-negative
-      time in milliseconds. Defaults to `:latest`.
+      time in milliseconds.
       """
     ],
     begin_offset: [
       type: {:in, [:assigned, :reset]},
       default: :assigned,
       doc: """
-      How consumers choose their first offset. `:assigned` uses the offsets from the Kafka
-      partition assignments. `:reset` uses `:offset_reset_policy`. Defaults to `:assigned`.
+      How consumers choose their first offset. When set to `:assigned`, the starting offset
+      will be the one returned in the Kafka partition assignments (the latest committed
+      offsets for the consumer group). When set to `:reset`, the starting offset will be
+      dictated by the `:offset_reset_policy` option, either starting from the `:earliest`
+      or the `:latest` offsets of the topic.
       """
     ],
     shared_client: [
       type: :boolean,
       default: false,
       doc: """
-      Whether all producers share one client. Sharing can cut memory and other resource use,
-      but it may cause a large drop in throughput.
+      When `false`, it starts one `:brod` client per producer. When `true`, it starts a
+      single shared `:brod` client across all producers (which may reduce
+      memory/resource usage). May cause severe performance degradation, see
+      ["Shared Client Performance"](#module-shared-client-performance) for details.
       """
     ],
     group_config: [
       type: :keyword_list,
       default: [],
       keys: group_config_schema,
+      subsection: "### Group config",
       doc: """
       Options passed to `:brod`'s group coordinator.
       """
@@ -209,14 +237,17 @@ defmodule BroadwayKafka.ProducerOptions do
       type: :keyword_list,
       default: [],
       keys: fetch_config_schema,
+      subsection: "### Fetch config",
       doc: """
-      Options passed to `:brod.fetch/5` when it fetches messages.
+      The available options to configure how messages are fetched. Unless noted
+      otherwise, they are internally passed to `:brod.fetch/5`.
       """
     ],
     client_config: [
       type: :keyword_list,
       default: [],
       keys: client_config_schema,
+      subsection: "### Client config",
       doc: """
       Options passed to `:brod.start_client/3` when it starts a client.
       """
