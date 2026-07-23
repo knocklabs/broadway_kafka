@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.0 (2026-07-23)
+
+  * Add support for `:allow_topic_auto_creation` in client config.
+  * When fetching returns an error, retry if that error is part of a set of errors that Kafka documents as *retriable*.
+
 ## v0.4.4 (2024-07-08)
 
  * Update brod dependency to ~> 3.6 or ~> 4.0
