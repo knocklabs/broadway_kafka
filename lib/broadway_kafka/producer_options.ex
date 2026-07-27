@@ -7,7 +7,10 @@ defmodule BroadwayKafka.ProducerOptions do
       doc: """
       A unique, non-empty string that identifies this consumer group member across restarts.
       This enables [static group membership](https://kafka.apache.org/39/design/design/#static-membership)
-      and requires `:brod` 4.4.2 or later. *Available since v0.6.0*.
+      and requires a `:brod` with fenced-member support. No released `:brod` has that yet,
+      so this fork depends on [`knocklabs/brod`](https://github.com/knocklabs/brod) (see
+      [kafka4beam/brod#669](https://github.com/kafka4beam/brod/pull/669)). *Available since
+      v0.6.0*.
       """
     ],
     offset_commit_interval_seconds: [
