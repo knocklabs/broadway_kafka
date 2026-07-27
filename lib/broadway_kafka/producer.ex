@@ -87,6 +87,11 @@ defmodule BroadwayKafka.Producer do
       these events are emitted in "span style" when receiving assignments revoked call from consumer group coordinator
       See `:telemetry.span/3`.
 
+    * `[:broadway_kafka, :fenced_instance_id]` - emitted after a producer has
+      stopped consuming because Kafka **fenced** its static group member. The
+      measurement is `:system_time`. The metadata includes `:producer`,
+      `:client_id`, `:group_id`, and `:group_instance_id`.
+
   ## Shared Client Performance
 
   Enabling shared client may drastically decrease performance. Since connection is handled by a single process,
@@ -173,7 +178,9 @@ defmodule BroadwayKafka.Producer do
       shutting_down?: false,
       buffer: :queue.new(),
       max_demand: max_demand,
-      shared_client: config.shared_client
+      shared_client: config.shared_client,
+      client_connected?: false,
+      fenced?: false
     }
 
     {:producer, connect(state)}
@@ -197,6 +204,11 @@ defmodule BroadwayKafka.Producer do
   end
 
   @impl GenStage
+  # When this producer is fenced, we "ignore" demand by always returning zero events.
+  def handle_demand(_incoming_demand, %{fenced?: true} = state) do
+    {:noreply, [], state}
+  end
+
   def handle_demand(incoming_demand, %{demand: demand} = state) do
     maybe_schedule_poll(%{state | demand: demand + incoming_demand}, 0)
   end
@@ -219,6 +231,10 @@ defmodule BroadwayKafka.Producer do
   end
 
   @impl GenStage
+  def handle_cast({:update_topics, _topics}, %{fenced?: true} = state) do
+    {:noreply, [], state}
+  end
+
   def handle_cast({:update_topics, topics}, state) do
     state.client.update_topics(state.group_coordinator, topics)
 
@@ -226,6 +242,10 @@ defmodule BroadwayKafka.Producer do
   end
 
   @impl GenStage
+  def handle_info({:poll, _key}, %{fenced?: true} = state) do
+    {:noreply, [], state}
+  end
+
   def handle_info({:poll, key}, %{acks: acks, demand: demand, max_demand: max_demand} = state) do
     # We only poll if:
     #
@@ -253,8 +273,19 @@ defmodule BroadwayKafka.Producer do
     end
   end
 
+  def handle_info(:maybe_schedule_poll, %{fenced?: true} = state) do
+    {:noreply, [], state}
+  end
+
   def handle_info(:maybe_schedule_poll, state) do
     maybe_schedule_poll(%{state | receive_timer: nil}, state.receive_interval)
+  end
+
+  def handle_info(
+        {:put_assignments, _group_generation_id, _assignments},
+        %{fenced?: true} = state
+      ) do
+    {:noreply, [], state}
   end
 
   def handle_info({:put_assignments, group_generation_id, assignments}, state) do
@@ -287,17 +318,13 @@ defmodule BroadwayKafka.Producer do
       end)
 
     topics_partitions = Enum.map(list, fn {_, topic, partition, _} -> {topic, partition} end)
-    {broadway_index, processors_allocators, batchers_allocators} = state.allocator_names
-
-    for allocator_name <- processors_allocators do
-      Allocator.allocate(allocator_name, broadway_index, topics_partitions)
-    end
-
-    for allocator_name <- batchers_allocators do
-      Allocator.allocate(allocator_name, broadway_index, topics_partitions)
-    end
+    allocate(state, topics_partitions)
 
     {:noreply, [], %{state | acks: Acknowledger.add(state.acks, list)}}
+  end
+
+  def handle_info({:ack, _key, _offsets}, %{fenced?: true} = state) do
+    {:noreply, [], state}
   end
 
   def handle_info({:ack, key, offsets}, state) do
@@ -334,6 +361,13 @@ defmodule BroadwayKafka.Producer do
     {:noreply, [], new_state}
   end
 
+  def handle_info(
+        {:DOWN, _ref, _, {client_id, _}, _reason},
+        %{client_id: client_id, fenced?: true} = state
+      ) do
+    {:noreply, [], %{state | client_connected?: false}}
+  end
+
   def handle_info({:DOWN, _ref, _, {client_id, _}, _reason}, %{client_id: client_id} = state) do
     if coord = state.group_coordinator do
       Process.exit(coord, :shutdown)
@@ -342,7 +376,34 @@ defmodule BroadwayKafka.Producer do
     state = reset_buffer(state)
     schedule_reconnect(state.reconnect_timeout)
 
-    {:noreply, [], %{state | group_coordinator: nil}}
+    {:noreply, [], %{state | group_coordinator: nil, client_connected?: false}}
+  end
+
+  def handle_info(
+        {:DOWN, _ref, _, coord, :fenced_instance_id},
+        %{group_coordinator: coord} = state
+      ) do
+    group_instance_id = get_in(state.config, [:group_config, :group_instance_id])
+
+    Logger.error(
+      "Kafka fenced static group member #{inspect(group_instance_id)} because another live " <>
+        "member uses the same :group_instance_id; this producer will not reconnect"
+    )
+
+    state = pause_fenced_producer(state)
+
+    :telemetry.execute(
+      [:broadway_kafka, :fenced_instance_id],
+      %{system_time: System.system_time()},
+      %{
+        producer: self(),
+        client_id: state.client_id,
+        group_id: state.config[:group_id],
+        group_instance_id: group_instance_id
+      }
+    )
+
+    {:noreply, [], state}
   end
 
   def handle_info({:DOWN, _ref, _, coord, _reason}, %{group_coordinator: coord} = state) do
@@ -353,6 +414,10 @@ defmodule BroadwayKafka.Producer do
   end
 
   def handle_info({:EXIT, _pid, _reason}, state) do
+    {:noreply, [], state}
+  end
+
+  def handle_info(:reconnect, %{fenced?: true} = state) do
     {:noreply, [], state}
   end
 
@@ -465,7 +530,7 @@ defmodule BroadwayKafka.Producer do
     %{client: client, group_coordinator: group_coordinator, client_id: client_id} = state
     group_coordinator && Process.exit(group_coordinator, :shutdown)
 
-    if state.shared_client == false do
+    if state.shared_client == false and state.client_connected? do
       client.disconnect(client_id)
     end
 
@@ -576,7 +641,7 @@ defmodule BroadwayKafka.Producer do
 
     case client.setup(self(), client_id, __MODULE__, config) do
       {:ok, coord_pid, _coord_ref} ->
-        %{state | group_coordinator: coord_pid}
+        %{state | group_coordinator: coord_pid, client_connected?: true}
 
       error ->
         raise "Cannot connect to Kafka. Reason #{inspect(error)}"
@@ -671,6 +736,51 @@ defmodule BroadwayKafka.Producer do
 
   defp reset_buffer(state) do
     put_in(state.buffer, :queue.new())
+  end
+
+  defp pause_fenced_producer(state) do
+    if is_reference(state.receive_timer) do
+      Process.cancel_timer(state.receive_timer)
+    end
+
+    if state.revoke_caller do
+      GenStage.reply(state.revoke_caller, :ok)
+    end
+
+    allocate(state, [])
+    set_draining_after_revoke!(state.draining_after_revoke_flag, false)
+
+    state = %{
+      state
+      | acks: Acknowledger.new(),
+        buffer: :queue.new(),
+        demand: 0,
+        fenced?: true,
+        group_coordinator: nil,
+        receive_timer: nil,
+        revoke_caller: nil,
+        shutting_down?: true
+    }
+
+    disconnect_private_client(state)
+  end
+
+  defp disconnect_private_client(%{shared_client: true} = state), do: state
+  defp disconnect_private_client(%{client_connected?: false} = state), do: state
+
+  defp disconnect_private_client(state) do
+    :ok = state.client.disconnect(state.client_id)
+    %{state | client_connected?: false}
+  end
+
+  defp allocate(state, topics_partitions) do
+    {broadway_index, processors_allocators, batchers_allocators} = state.allocator_names
+
+    for allocator_name <- processors_allocators ++ batchers_allocators do
+      :ok = Allocator.allocate(allocator_name, broadway_index, topics_partitions)
+    end
+
+    :ok
   end
 
   defp schedule_reconnect(timeout) do

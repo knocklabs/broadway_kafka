@@ -27,7 +27,9 @@ defmodule BroadwayKafka.MixProject do
   defp deps do
     [
       {:broadway, "~> 1.0"},
-      {:brod, "~> 3.16 or ~> 4.0"},
+      # We need our brod fork until https://github.com/kafka4beam/brod/pull/669
+      # (fenced static member support) is merged and released upstream.
+      {:brod, github: "knocklabs/brod", ref: "d16aa8cea37ad9aa8e8591aba0eb2ef814c93e6b"},
       {:nimble_options, "~> 0.3 or ~> 1.0"},
       {:telemetry, "~> 0.4.3 or ~> 1.0"},
       {:ex_doc, ">= 0.19.0", only: :docs}
