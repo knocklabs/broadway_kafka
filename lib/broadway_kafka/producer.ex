@@ -787,10 +787,16 @@ defmodule BroadwayKafka.Producer do
     Process.send_after(self(), :reconnect, timeout)
   end
 
-  defp drain_after_revoke_table_name!(pid) do
-    {_, producer_name} = Process.info(pid, :registered_name)
+  defp drain_after_revoke_table_name!(nil), do: nil
 
-    Module.concat([producer_name, DrainingAfterRevoke])
+  defp drain_after_revoke_table_name!(pid) when is_pid(pid) do
+    case Process.info(pid, :registered_name) do
+      {:registered_name, producer_name} ->
+        Module.concat([producer_name, DrainingAfterRevoke])
+
+      nil ->
+        nil
+    end
   end
 
   defp drain_after_revoke_table_init!(table_name) do
@@ -803,6 +809,8 @@ defmodule BroadwayKafka.Producer do
 
   defp set_draining_after_revoke!(table_name, value) do
     :ets.insert(table_name, {:draining, value})
+  rescue
+    ArgumentError -> :ok
   end
 
   defp is_draining_after_revoke?(table_name) do
