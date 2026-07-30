@@ -747,7 +747,12 @@ defmodule BroadwayKafka.Producer do
       GenStage.reply(state.revoke_caller, :ok)
     end
 
-    allocate(state, [])
+    # We deliberately do NOT clear the partition allocations here. Unlike a
+    # regular revoke, fencing doesn't drain the pipeline first, so messages
+    # already emitted downstream still route through the allocator ETS tables
+    # (via :partition_by). Clearing the tables would make those lookups raise
+    # and crash processors/batchers holding in-flight messages. Since a fenced
+    # producer never gets new assignments, the stale entries are harmless.
     set_draining_after_revoke!(state.draining_after_revoke_flag, false)
 
     state = %{

@@ -718,8 +718,11 @@ defmodule BroadwayKafka.ProducerTest do
 
     assert log =~ "Kafka fenced static group member"
     assert_receive :disconnected
-    assert Allocator.to_map(get_processor_allocator(pid)) == %{0 => []}
-    assert Allocator.to_map(get_batcher_allocator(pid)) == %{0 => []}
+
+    # Allocations are deliberately kept: in-flight messages downstream still
+    # route through the allocator tables (see pause_fenced_producer/1).
+    assert Allocator.to_map(get_processor_allocator(pid)) == %{0 => [{"topic", 0}]}
+    assert Allocator.to_map(get_batcher_allocator(pid)) == %{0 => [{"topic", 0}]}
 
     flush_messages_received()
     MessageServer.push_messages(message_server, [1], topic: "topic", partition: 0)
@@ -738,6 +741,48 @@ defmodule BroadwayKafka.ProducerTest do
     refute_receive {:telemetry, [:broadway_kafka, :fenced_instance_id], _, _}
 
     assert Process.alive?(producer)
+
+    stop_broadway(pid)
+  end
+
+  test "messages in flight when the member is fenced still reach batchers" do
+    {:ok, message_server} = MessageServer.start_link()
+
+    {:ok, pid} =
+      start_broadway(message_server,
+        batchers_concurrency: 1,
+        expose_group_coordinator: true,
+        group_instance_id: "consumer-1"
+      )
+
+    assert_receive {:group_coordinator, group_coordinator}
+
+    producer_name = get_producer(pid)
+    put_assignments(producer_name, [[topic: "topic", partition: 0]])
+    assert_receive {:messages_fetched, 0}
+
+    # Park messages between the processors and the batcher: with the batcher
+    # suspended, processed events pile up in its mailbox without being handled.
+    batcher = pid |> get_batcher() |> Process.whereis()
+    :ok = :sys.suspend(batcher)
+
+    MessageServer.push_messages(message_server, 1..5, topic: "topic", partition: 0)
+
+    for _ <- 1..5 do
+      assert_receive {:message_handled, %{topic: "topic", partition: 0}}
+    end
+
+    capture_log(fn ->
+      Process.exit(group_coordinator, :fenced_instance_id)
+      assert_receive :disconnected
+    end)
+
+    # Once the batcher resumes, it partitions the parked messages via the
+    # allocator tables, which must still hold the fenced producer's entries.
+    :ok = :sys.resume(batcher)
+
+    assert_receive {:batch_handled, %{topic: "topic", partition: 0}}
+    assert Process.alive?(batcher)
 
     stop_broadway(pid)
   end
@@ -946,6 +991,11 @@ defmodule BroadwayKafka.ProducerTest do
   defp get_batcher_allocator(broadway) do
     {_, name} = Process.info(broadway, :registered_name)
     Module.concat([name, "Allocator_batcher_consumer_default"])
+  end
+
+  defp get_batcher(broadway) do
+    {_, name} = Process.info(broadway, :registered_name)
+    :"#{name}.Broadway.Batcher_default"
   end
 
   defp stop_broadway(pid) do
